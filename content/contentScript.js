@@ -786,6 +786,7 @@ let AutofillEngine = null;
 let CalendlyHandler = null;
 let MultiStepNavigationEngine = null;
 let RetryEngine = null;
+let SuccessDetector = null;
 
 let filledElements = new WeakSet();
 let observerActive = false;
@@ -861,25 +862,28 @@ function startGlobalMutationObserver() {
 }
 
 async function loadModules() {
-  if (FormDetector && AutofillEngine && CalendlyHandler && MultiStepNavigationEngine && RetryEngine) return;
+  if (FormDetector && AutofillEngine && CalendlyHandler && MultiStepNavigationEngine && RetryEngine && SuccessDetector) return;
   try {
     const formDetectorUrl = chrome.runtime.getURL("modules/formDetector.js");
     const autofillEngineUrl = chrome.runtime.getURL("modules/autofillEngine.js");
     const calendlyHandlerUrl = chrome.runtime.getURL("modules/calendlyHandler.js");
     const navigationEngineUrl = chrome.runtime.getURL("modules/multiStepNavigationEngine.js");
     const retryEngineUrl = chrome.runtime.getURL("modules/retryEngine.js");
-    const [fdMod, aeMod, chMod, neMod, reMod] = await Promise.all([
+    const successDetectorUrl = chrome.runtime.getURL("modules/successDetector.js");
+    const [fdMod, aeMod, chMod, neMod, reMod, sdMod] = await Promise.all([
       import(formDetectorUrl),
       import(autofillEngineUrl),
       import(calendlyHandlerUrl),
       import(navigationEngineUrl),
-      import(retryEngineUrl)
+      import(retryEngineUrl),
+      import(successDetectorUrl)
     ]);
     FormDetector = fdMod.FormDetector;
     AutofillEngine = aeMod.AutofillEngine;
     CalendlyHandler = chMod.CalendlyHandler;
     MultiStepNavigationEngine = neMod.MultiStepNavigationEngine;
     RetryEngine = reMod.RetryEngine;
+    SuccessDetector = sdMod.SuccessDetector;
     console.log("[Outreach Engine] Smart modules imported dynamically.");
   } catch (e) {
     console.error("[Outreach Engine] Dynamic import error: ", e);
@@ -1037,7 +1041,20 @@ async function fillStandardFormFields(data) {
           fallbackForm.requestSubmit ? fallbackForm.requestSubmit() : fallbackForm.submit(); 
         }
       }
-      setTimeout(() => { resetAutomation(); chrome.runtime.sendMessage({ action: "AUTOMATION_COMPLETE_SUCCESS" }); }, 3000);
+      if (SuccessDetector) {
+        const initialUrl = window.location.href;
+        SuccessDetector.verifySubmission(initialUrl).then(verification => {
+          console.log("[Outreach Engine] Submission verification result:", verification);
+          if (verification.success) {
+            chrome.runtime.sendMessage({ action: "AUTOMATION_COMPLETE_SUCCESS", reason: verification.reason });
+          } else {
+            chrome.runtime.sendMessage({ action: "AUTOMATION_COMPLETE_FAILURE", reason: verification.reason });
+          }
+          resetAutomation();
+        });
+      } else {
+        setTimeout(() => { resetAutomation(); chrome.runtime.sendMessage({ action: "AUTOMATION_COMPLETE_SUCCESS" }); }, 3000);
+      }
     }, 1500);
     const scoresStatus = `Name: ${detected.name.confidence} Conf, Email: ${detected.email.confidence} Conf, Msg: ${detected.message.confidence} Conf`;
     return `Form details populated and Auto-Submitted. (${scoresStatus})`;
