@@ -785,6 +785,7 @@ let FormDetector = null;
 let AutofillEngine = null;
 let CalendlyHandler = null;
 let MultiStepNavigationEngine = null;
+let RetryEngine = null;
 
 let filledElements = new WeakSet();
 let observerActive = false;
@@ -860,22 +861,25 @@ function startGlobalMutationObserver() {
 }
 
 async function loadModules() {
-  if (FormDetector && AutofillEngine && CalendlyHandler && MultiStepNavigationEngine) return;
+  if (FormDetector && AutofillEngine && CalendlyHandler && MultiStepNavigationEngine && RetryEngine) return;
   try {
     const formDetectorUrl = chrome.runtime.getURL("modules/formDetector.js");
     const autofillEngineUrl = chrome.runtime.getURL("modules/autofillEngine.js");
     const calendlyHandlerUrl = chrome.runtime.getURL("modules/calendlyHandler.js");
     const navigationEngineUrl = chrome.runtime.getURL("modules/multiStepNavigationEngine.js");
-    const [fdMod, aeMod, chMod, neMod] = await Promise.all([
+    const retryEngineUrl = chrome.runtime.getURL("modules/retryEngine.js");
+    const [fdMod, aeMod, chMod, neMod, reMod] = await Promise.all([
       import(formDetectorUrl),
       import(autofillEngineUrl),
       import(calendlyHandlerUrl),
-      import(navigationEngineUrl)
+      import(navigationEngineUrl),
+      import(retryEngineUrl)
     ]);
     FormDetector = fdMod.FormDetector;
     AutofillEngine = aeMod.AutofillEngine;
     CalendlyHandler = chMod.CalendlyHandler;
     MultiStepNavigationEngine = neMod.MultiStepNavigationEngine;
+    RetryEngine = reMod.RetryEngine;
     console.log("[Outreach Engine] Smart modules imported dynamically.");
   } catch (e) {
     console.error("[Outreach Engine] Dynamic import error: ", e);
