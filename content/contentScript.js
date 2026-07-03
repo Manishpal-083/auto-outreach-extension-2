@@ -619,6 +619,26 @@ async function findContactPageAndRedirect() {
   throw new Error("No Contact Page Found.");
 }
 
+let FormDetector = null;
+let AutofillEngine = null;
+
+async function loadModules() {
+  if (FormDetector && AutofillEngine) return;
+  try {
+    const formDetectorUrl = chrome.runtime.getURL("modules/formDetector.js");
+    const autofillEngineUrl = chrome.runtime.getURL("modules/autofillEngine.js");
+    const [fdMod, aeMod] = await Promise.all([
+      import(formDetectorUrl),
+      import(autofillEngineUrl)
+    ]);
+    FormDetector = fdMod.FormDetector;
+    AutofillEngine = aeMod.AutofillEngine;
+    console.log("[Outreach Engine] Smart modules imported dynamically.");
+  } catch (e) {
+    console.error("[Outreach Engine] Dynamic import error: ", e);
+  }
+}
+
 async function handleFormOrCalendlyFilling(data) {
   if (window.location.hostname.includes("calendly.com")) {
     try {
@@ -636,8 +656,18 @@ async function handleFormOrCalendlyFilling(data) {
   let calendlyStatus = "Calendly Not Found";
 
   try {
-    const hasNativeForm = document.querySelector(DOM_SELECTORS.name) || document.querySelector(DOM_SELECTORS.email);
-    if (hasNativeForm) { nativeFormStatus = await fillStandardFormFields(data); }
+    await loadModules();
+    const detected = FormDetector ? FormDetector.detectFields() : null;
+    const hasNativeForm = detected ? (detected.name.element || detected.email.element || detected.message.element) : null;
+    
+    if (hasNativeForm) {
+      nativeFormStatus = await fillStandardFormFields(data);
+    } else {
+      const hasPotentiallyDynamicForm = document.querySelector("form") || document.querySelector("input") || document.querySelector("textarea") || document.querySelector('[role="textbox"]') || document.querySelector('[contenteditable]');
+      if (hasPotentiallyDynamicForm) {
+        nativeFormStatus = await waitForAndFillStandardFields(data);
+      }
+    }
   } catch (err) { nativeFormStatus = err.message; }
 
   if (!window.location.hostname.includes("calendly.com") && !document.querySelector('iframe[src*="calendly.com"]')) {
@@ -688,6 +718,73 @@ function triggerSchedulerButtonClicks() {
 }
 
 async function fillStandardFormFields(data) {
+  await loadModules();
+
+  if (!FormDetector || !AutofillEngine) {
+    console.warn("[Outreach Engine] Fallback form filling active.");
+    return await fillStandardFormFieldsFallback(data);
+  }
+
+  console.log("[Outreach Engine] Scanning DOM with Universal Form Detection System...");
+  const detected = FormDetector.detectFields();
+
+  // Log confidence scores
+  console.log("[Outreach Engine] Field Detection Scores & Confidence:", {
+    name: { element: detected.name.element, score: detected.name.score, confidence: detected.name.confidence },
+    email: { element: detected.email.element, score: detected.email.score, confidence: detected.email.confidence },
+    message: { element: detected.message.element, score: detected.message.score, confidence: detected.message.confidence },
+    phone: { element: detected.phone.element, score: detected.phone.score, confidence: detected.phone.confidence },
+    company: { element: detected.company.element, score: detected.company.score, confidence: detected.company.confidence },
+    subject: { element: detected.subject.element, score: detected.subject.score, confidence: detected.subject.confidence }
+  });
+
+  let filledSomething = false;
+
+  if (detected.name.element && data.name) {
+    AutofillEngine.fillInput(detected.name.element, data.name);
+    filledSomething = true;
+  }
+  if (detected.email.element && data.email) {
+    AutofillEngine.fillInput(detected.email.element, data.email);
+    filledSomething = true;
+  }
+  if (detected.message.element && data.message) {
+    AutofillEngine.fillInput(detected.message.element, data.message);
+    filledSomething = true;
+  }
+  if (detected.phone.element && data.phone && detected.phone.confidence > 0.2) {
+    AutofillEngine.fillInput(detected.phone.element, data.phone);
+    filledSomething = true;
+  }
+  if (detected.company.element && data.company && detected.company.confidence > 0.2) {
+    AutofillEngine.fillInput(detected.company.element, data.company);
+    filledSomething = true;
+  }
+  if (detected.subject.element && data.subject && detected.subject.confidence > 0.2) {
+    AutofillEngine.fillInput(detected.subject.element, data.subject);
+    filledSomething = true;
+  }
+
+  if (filledSomething) {
+    setTimeout(() => {
+      const submitBtn = document.querySelector(DOM_SELECTORS.submit);
+      if (submitBtn) { realClick(submitBtn); }
+      else {
+        const matchedEl = detected.email.element || detected.name.element || detected.message.element;
+        const fallbackForm = matchedEl ? matchedEl.closest('form') : document.querySelector('form');
+        if (fallbackForm && fallbackForm.isConnected) { 
+          fallbackForm.requestSubmit ? fallbackForm.requestSubmit() : fallbackForm.submit(); 
+        }
+      }
+      setTimeout(() => { resetAutomation(); chrome.runtime.sendMessage({ action: "AUTOMATION_COMPLETE_SUCCESS" }); }, 3000);
+    }, 1500);
+    const scoresStatus = `Name: ${detected.name.confidence} Conf, Email: ${detected.email.confidence} Conf, Msg: ${detected.message.confidence} Conf`;
+    return `Form details populated and Auto-Submitted. (${scoresStatus})`;
+  }
+  throw new Error("No fillable native inputs detected.");
+}
+
+async function fillStandardFormFieldsFallback(data) {
   const inputs = {
     name: document.querySelector(DOM_SELECTORS.name),
     email: document.querySelector(DOM_SELECTORS.email),
@@ -722,6 +819,57 @@ async function fillStandardFormFields(data) {
     return "Form details populated and Auto-Submitted.";
   }
   throw new Error("No fillable native inputs detected.");
+}
+
+async function waitForAndFillStandardFields(data) {
+  return new Promise((resolve, reject) => {
+    console.log("[Outreach Engine] No fields detected immediately. Setting up dynamic field observer...");
+    let observer;
+    let timeoutId;
+    let isFinished = false;
+
+    const checkAndFill = async () => {
+      try {
+        const detected = FormDetector.detectFields();
+        if (detected.name.element || detected.email.element) {
+          if (isFinished) return;
+          isFinished = true;
+          if (observer) observer.disconnect();
+          clearTimeout(timeoutId);
+          
+          const result = await fillStandardFormFields(data);
+          resolve(result);
+        }
+      } catch (err) {
+        if (isFinished) return;
+        isFinished = true;
+        if (observer) observer.disconnect();
+        clearTimeout(timeoutId);
+        reject(err);
+      }
+    };
+
+    observer = new MutationObserver(() => {
+      checkAndFill();
+    });
+    observer.observe(document.body, { childList: true, subtree: true });
+
+    const intervalId = setInterval(() => {
+      if (isFinished) {
+        clearInterval(intervalId);
+      } else {
+        checkAndFill();
+      }
+    }, 1000);
+
+    timeoutId = setTimeout(() => {
+      if (isFinished) return;
+      isFinished = true;
+      observer.disconnect();
+      clearInterval(intervalId);
+      reject(new Error("Timeout waiting for dynamically inserted form fields."));
+    }, 15000);
+  });
 }
 
 async function fillCalendlyInsideIframe(iframe, data) {
@@ -796,25 +944,36 @@ async function fillCalendlyDOM(docContext, data) {
     }
   }
 
-  const reactType = (el, value) => {
-    if (!el || !value) return false;
-    const nativeSetter = Object.getOwnPropertyDescriptor(el.tagName === "TEXTAREA" ? HTMLTextAreaElement.prototype : HTMLInputElement.prototype, "value")?.set;
-    el.focus();
-    nativeSetter.call(el, value);
-    el.dispatchEvent(new Event("input", { bubbles: true }));
-    el.dispatchEvent(new Event("change", { bubbles: true }));
-    el.blur();
-    return true;
-  };
-
-  const nameInput = docContext.querySelector('input[name="name"], input[autocomplete="name"], input[id*="name" i], input[type="text"]');
-  const emailInput = docContext.querySelector('input[type="email"], input[name="email"], input[id*="email" i]');
-  const notesInput = docContext.querySelector('textarea');
+  await loadModules();
+  let nameInput, emailInput, notesInput;
+  if (FormDetector && AutofillEngine) {
+    const detected = FormDetector.detectFields(docContext);
+    nameInput = detected.name.element;
+    emailInput = detected.email.element;
+    notesInput = detected.message.element;
+  } else {
+    nameInput = docContext.querySelector('input[name="name"], input[autocomplete="name"], input[id*="name" i], input[type="text"]');
+    emailInput = docContext.querySelector('input[type="email"], input[name="email"], input[id*="email" i]');
+    notesInput = docContext.querySelector('textarea');
+  }
 
   let filled = false;
-  if (nameInput) { reactType(nameInput, data.name); filled = true; }
-  if (emailInput) { reactType(emailInput, data.email); filled = true; }
-  if (notesInput) { reactType(notesInput, data.message); }
+  const fillHelper = (el, val) => {
+    if (!el || !val) return false;
+    if (AutofillEngine) {
+      return AutofillEngine.fillInput(el, val);
+    } else {
+      el.focus(); el.value = val;
+      el.dispatchEvent(new Event("input", { bubbles: true }));
+      el.dispatchEvent(new Event("change", { bubbles: true }));
+      el.blur();
+      return true;
+    }
+  };
+
+  if (nameInput) { fillHelper(nameInput, data.name); filled = true; }
+  if (emailInput) { fillHelper(emailInput, data.email); filled = true; }
+  if (notesInput) { fillHelper(notesInput, data.message); }
 
   if (!filled) {
     setupCalendlyObserver(docContext, data);
