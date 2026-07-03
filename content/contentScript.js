@@ -986,7 +986,9 @@ async function fillStandardFormFields(data) {
     message: { element: detected.message.element, score: detected.message.score, confidence: detected.message.confidence },
     phone: { element: detected.phone.element, score: detected.phone.score, confidence: detected.phone.confidence },
     company: { element: detected.company.element, score: detected.company.score, confidence: detected.company.confidence },
-    subject: { element: detected.subject.element, score: detected.subject.score, confidence: detected.subject.confidence }
+    website: { element: detected.website?.element, score: detected.website?.score, confidence: detected.website?.confidence },
+    budget: { element: detected.budget?.element, score: detected.budget?.score, confidence: detected.budget?.confidence },
+    service: { element: detected.service?.element, score: detected.service?.score, confidence: detected.service?.confidence }
   });
 
   let filledSomething = false;
@@ -1011,8 +1013,16 @@ async function fillStandardFormFields(data) {
     AutofillEngine.fillInput(detected.company.element, data.company);
     filledSomething = true;
   }
-  if (detected.subject.element && data.subject && detected.subject.confidence > 0.2) {
-    AutofillEngine.fillInput(detected.subject.element, data.subject);
+  if (detected.website?.element && data.website && detected.website.confidence > 0.2) {
+    AutofillEngine.fillInput(detected.website.element, data.website);
+    filledSomething = true;
+  }
+  if (detected.budget?.element && data.budget && detected.budget.confidence > 0.2) {
+    AutofillEngine.fillInput(detected.budget.element, data.budget);
+    filledSomething = true;
+  }
+  if (detected.service?.element && data.service && detected.service.confidence > 0.2) {
+    AutofillEngine.fillInput(detected.service.element, data.service);
     filledSomething = true;
   }
 

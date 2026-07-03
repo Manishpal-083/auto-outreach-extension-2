@@ -22,11 +22,19 @@ export class FormDetector {
       },
       company: {
         strong: ['company', 'organization', 'org', 'business', 'firm', 'workplace', 'employer'],
-        medium: ['site', 'website', 'employer']
+        medium: ['site', 'employer']
       },
-      subject: {
-        strong: ['subject', 'title', 'topic', 'reason', 'purpose'],
-        medium: ['header', 'about']
+      website: {
+        strong: ['website', 'url', 'site', 'domain', 'web-page', 'webpage'],
+        medium: ['link', 'online', 'page']
+      },
+      budget: {
+        strong: ['budget', 'price', 'cost', 'spend', 'amount', 'investment', 'range', 'revenue', 'funding'],
+        medium: ['tier']
+      },
+      service: {
+        strong: ['service', 'interest', 'product', 'solution', 'request', 'package', 'needs', 'requirement'],
+        medium: ['type', 'category', 'option']
       }
     };
   }
@@ -287,98 +295,168 @@ export class FormDetector {
   }
 
   /**
-   * Scores a candidate element against a target field using multiple selectors
+   * Helper function to extract direct parent text contents excluding the element itself
+   */
+  static getParentText(el) {
+    const parent = el.parentElement;
+    if (!parent) return '';
+    const childTexts = [];
+    for (const node of parent.childNodes) {
+      if (node !== el && node.nodeType === Node.TEXT_NODE) {
+        childTexts.push(node.textContent.trim());
+      }
+    }
+    return childTexts.join(' ').trim();
+  }
+
+  /**
+   * Helper function to extract nearby text surrounding the element
+   */
+  static getNearbyText(el) {
+    const texts = [];
+    let siblingBefore = el.previousElementSibling;
+    let count = 0;
+    while (siblingBefore && count < 2) {
+      const txt = (siblingBefore.innerText || siblingBefore.textContent || '').trim();
+      if (txt) {
+        texts.push(txt);
+        count++;
+      }
+      siblingBefore = siblingBefore.previousElementSibling;
+    }
+    let siblingAfter = el.nextElementSibling;
+    count = 0;
+    while (siblingAfter && count < 2) {
+      const txt = (siblingAfter.innerText || siblingAfter.textContent || '').trim();
+      if (txt) {
+        texts.push(txt);
+        count++;
+      }
+      siblingAfter = siblingAfter.nextElementSibling;
+    }
+    return texts.join(' ');
+  }
+
+  /**
+   * Helper function to find the nearest preceding heading/legend section title
+   */
+  static getSectionHeading(el) {
+    let curr = el;
+    const bodyNode = typeof document !== 'undefined' ? document.body : null;
+    while (curr && curr !== bodyNode) {
+      let sibling = curr.previousElementSibling;
+      while (sibling) {
+        const tag = sibling.tagName.toLowerCase();
+        if (/h[1-6]|legend/i.test(tag) || sibling.getAttribute('role') === 'heading') {
+          return (sibling.innerText || sibling.textContent || '').trim();
+        }
+        const headerInside = typeof sibling.querySelector === 'function' ? sibling.querySelector('h1, h2, h3, h4, h5, h6, legend, [role="heading"]') : null;
+        if (headerInside) {
+          return (headerInside.innerText || headerInside.textContent || '').trim();
+        }
+        sibling = sibling.previousElementSibling;
+      }
+      curr = curr.parentElement;
+    }
+    return '';
+  }
+
+  /**
+   * Performs weighted heuristic classification for an element.
+   * Collects: label, placeholder, aria, id, name, nearby text, parent text, section heading.
+   * Returns: Name, Email, Phone, Company, Website, Budget, Service, Message, Unknown
+   */
+  static classifyElement(el) {
+    const metadata = {
+      label: this.getLabelText(el) || '',
+      placeholder: el.getAttribute('placeholder') || '',
+      aria: el.getAttribute('aria-label') || '',
+      id: el.getAttribute('id') || '',
+      name: el.getAttribute('name') || '',
+      autocomplete: el.getAttribute('autocomplete') || '',
+      testid: el.getAttribute('data-testid') || '',
+      dataname: el.getAttribute('data-name') || '',
+      classlist: el.className || '',
+      vmodel: el.getAttribute('v-model') || el.getAttribute(':value') || '',
+      angularmodel: el.getAttribute('formcontrolname') || el.getAttribute('ng-model') || el.getAttribute('ng-reflect-name') || '',
+      nearbyText: this.getNearbyText(el) || '',
+      parentText: this.getParentText(el) || '',
+      sectionHeading: this.getSectionHeading(el) || ''
+    };
+
+    const targetFields = ['name', 'email', 'phone', 'company', 'website', 'budget', 'service', 'message'];
+    const scores = {};
+    let highestScore = 0;
+    let bestField = 'unknown';
+
+    const weights = {
+      label: 9,
+      name: 10,
+      id: 7,
+      placeholder: 8,
+      aria: 8,
+      autocomplete: 10,
+      testid: 8,
+      dataname: 8,
+      classlist: 5,
+      vmodel: 8,
+      angularmodel: 8,
+      sectionHeading: 8,
+      parentText: 6,
+      nearbyText: 6
+    };
+
+    for (const field of targetFields) {
+      let fieldScore = 0;
+      
+      for (const [metaKey, metaVal] of Object.entries(metadata)) {
+        if (!metaVal) continue;
+        const matchFactor = this.evaluateText(metaVal, field);
+        if (matchFactor > 0) {
+          fieldScore += matchFactor * (weights[metaKey] || 1.0);
+        }
+      }
+
+      // Special direct type enhancements
+      const tagName = el.tagName.toLowerCase();
+      const typeAttr = (el.getAttribute('type') || '').toLowerCase();
+      if (field === 'email' && typeAttr === 'email') fieldScore += 15;
+      if (field === 'phone' && typeAttr === 'tel') fieldScore += 15;
+      if (field === 'message' && tagName === 'textarea') fieldScore += 12;
+
+      // Role-textbox and contenteditable checks
+      const roleAttr = el.getAttribute('role');
+      const isContentEditable = el.hasAttribute('contenteditable') && el.getAttribute('contenteditable') !== 'false';
+      if (roleAttr === 'textbox' || isContentEditable) {
+        if (field === 'message') fieldScore += 5;
+        else fieldScore += 2;
+      }
+
+      scores[field] = fieldScore;
+      if (fieldScore > highestScore) {
+        highestScore = fieldScore;
+        bestField = field;
+      }
+    }
+
+    if (highestScore < 2) {
+      bestField = 'unknown';
+    }
+
+    return {
+      classification: bestField,
+      score: highestScore,
+      scores: scores,
+      metadata: metadata
+    };
+  }
+
+  /**
+   * Scores a candidate element against a target field (backward compatibility wrapper)
    */
   static scoreElement(el, targetField) {
-    let score = 0;
-    const nameAttr = el.getAttribute('name');
-    const idAttr = el.getAttribute('id');
-    const placeholderAttr = el.getAttribute('placeholder');
-    const autocompleteAttr = el.getAttribute('autocomplete');
-    const ariaLabel = el.getAttribute('aria-label');
-    const testId = el.getAttribute('data-testid');
-    const dataName = el.getAttribute('data-name');
-    const classList = el.className || '';
-
-    // Vue binding v-model
-    const vModel = el.getAttribute('v-model') || el.getAttribute(':value');
-    // Angular attributes
-    const formControlName = el.getAttribute('formcontrolname') || el.getAttribute('ng-model') || el.getAttribute('ng-reflect-name');
-
-    // 1. Evaluate Name Attribute (+10 max)
-    const nameMatch = this.evaluateText(nameAttr, targetField);
-    score += nameMatch * 10;
-
-    // 2. Evaluate Placeholder Attribute (+8 max)
-    const placeholderMatch = this.evaluateText(placeholderAttr, targetField);
-    score += placeholderMatch * 8;
-
-    // 3. Evaluate Label Tag Mapping (+9 max)
-    const labelText = this.getLabelText(el);
-    const labelMatch = this.evaluateText(labelText, targetField);
-    score += labelMatch * 9;
-
-    // 4. Evaluate Aria Attribute (+8 max)
-    const ariaMatch = this.evaluateText(ariaLabel, targetField);
-    score += ariaMatch * 8;
-
-    // 5. Evaluate Autocomplete Attribute (+10 max)
-    const autocompleteMatch = this.evaluateText(autocompleteAttr, targetField);
-    score += autocompleteMatch * 10;
-
-    // 6. Evaluate Test ID Attribute (+8 max)
-    const testIdMatch = this.evaluateText(testId, targetField);
-    score += testIdMatch * 8;
-
-    // 7. Evaluate Data-Name Attribute (+8 max)
-    const dataNameMatch = this.evaluateText(dataName, targetField);
-    score += dataNameMatch * 8;
-
-    // 8. Evaluate Framework Binding Attributes (+8 max)
-    const frameworkMatch = this.evaluateText(vModel || formControlName, targetField);
-    score += frameworkMatch * 8;
-
-    // 9. Evaluate ID Attribute (+7 max)
-    const idMatch = this.evaluateText(idAttr, targetField);
-    score += idMatch * 7;
-
-    // 10. Evaluate Class List (+5 max)
-    const classMatch = this.evaluateText(classList, targetField);
-    score += classMatch * 5;
-
-    // 11. Adjust based on Element Tag/Type Properties (Direct matching signals)
-    const tagName = el.tagName.toLowerCase();
-    const typeAttr = (el.getAttribute('type') || '').toLowerCase();
-
-    if (targetField === 'email') {
-      if (typeAttr === 'email') score += 15;
-    } else if (targetField === 'phone') {
-      if (typeAttr === 'tel') score += 15;
-    } else if (targetField === 'message') {
-      if (tagName === 'textarea') score += 12;
-    }
-
-    // Role-textbox check
-    const roleAttr = el.getAttribute('role');
-    const isContentEditable = el.hasAttribute('contenteditable') && el.getAttribute('contenteditable') !== 'false';
-    if (roleAttr === 'textbox' || isContentEditable) {
-      if (targetField === 'message') score += 5;
-      else score += 2;
-    }
-
-    // Visual Visibility Checks (Penalize invisible/hidden inputs, but keep React hidden inputs discoverable)
-    const style = window.getComputedStyle(el);
-    const isHiddenStyle = style.display === 'none' || style.visibility === 'hidden' || parseFloat(style.opacity || '1') === 0;
-    const isZeroSized = el.offsetWidth === 0 && el.offsetHeight === 0;
-    const isHiddenType = typeAttr === 'hidden';
-
-    if (isHiddenType) {
-      score -= 5; // React hidden input penalty
-    } else if (isHiddenStyle || isZeroSized) {
-      score -= 8; // Element is styled invisible penalty
-    }
-
-    return score;
+    const res = this.classifyElement(el);
+    return res.scores[targetField] || 0;
   }
 
   /**
@@ -387,7 +465,7 @@ export class FormDetector {
    */
   static detectFields(root = (typeof document !== 'undefined' ? document : null)) {
     const candidates = this.getCandidates(root);
-    const targetFields = ['name', 'email', 'message', 'phone', 'company', 'subject'];
+    const targetFields = ['name', 'email', 'phone', 'company', 'website', 'budget', 'service', 'message'];
     const scoringMatrix = [];
 
     // Score every candidate element against all target fields
@@ -413,7 +491,6 @@ export class FormDetector {
         continue;
       }
 
-      // Compute normalized confidence: map typical score of 30+ to 1.0
       const confidence = Math.min(1.0, parseFloat((match.score / 30).toFixed(2)));
 
       matches[match.field] = {
@@ -451,7 +528,9 @@ export class FormDetector {
       message: detected.message.element,
       phone: detected.phone.element,
       company: detected.company.element,
-      subject: detected.subject.element
+      website: detected.website?.element || null,
+      budget: detected.budget?.element || null,
+      service: detected.service?.element || null
     };
   }
 }
