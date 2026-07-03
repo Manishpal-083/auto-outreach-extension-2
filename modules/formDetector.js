@@ -35,7 +35,7 @@ export class FormDetector {
    * Recursively traverses standard DOM, Shadow DOM roots, and same-origin iframes
    * to find all candidate interactive elements.
    */
-  static getAllElements(root = document) {
+  static getAllElements(root = (typeof document !== 'undefined' ? document : null)) {
     const elements = [];
 
     function traverse(node) {
@@ -78,7 +78,7 @@ export class FormDetector {
   /**
    * Filters all candidate interactive inputs from the element list
    */
-  static getCandidates(root = document) {
+  static getCandidates(root = (typeof document !== 'undefined' ? document : null)) {
     const allElements = this.getAllElements(root);
     return allElements.filter(el => {
       const tagName = el.tagName.toLowerCase();
@@ -297,7 +297,7 @@ export class FormDetector {
    * Scans the document recursively and resolves matching fields.
    * Returns a map of target fields with matched element, raw score, and normalized confidence.
    */
-  static detectFields(root = document) {
+  static detectFields(root = (typeof document !== 'undefined' ? document : null)) {
     const candidates = this.getCandidates(root);
     const targetFields = ['name', 'email', 'message', 'phone', 'company', 'subject'];
     const scoringMatrix = [];
@@ -355,7 +355,7 @@ export class FormDetector {
   /**
    * Helper function to get simple element objects mapping for backward compatibility
    */
-  static getInputs(root = document) {
+  static getInputs(root = (typeof document !== 'undefined' ? document : null)) {
     const detected = this.detectFields(root);
     return {
       name: detected.name.element,
