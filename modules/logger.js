@@ -1,11 +1,16 @@
 // modules/logger.js
-export class AppLogger {
-  static log(message, type = 'system') {
-    console.log(`[${type.toUpperCase()}] ${message}`);
-    chrome.runtime.sendMessage({
-      action: 'LOG_MESSAGE',
-      message: message,
-      logType: type
-    }).catch(() => {});
+
+export class Logger {
+  static log(message, ...args) {
+    console.log(`[Outreach Engine] ${message}`, ...args);
+  }
+  static warn(message, ...args) {
+    console.warn(`[Outreach Engine] ${message}`, ...args);
+  }
+  static error(message, ...args) {
+    console.error(`[Outreach Engine] ${message}`, ...args);
+  }
+  static info(message, ...args) {
+    console.info(`[Outreach Engine] ${message}`, ...args);
   }
 }

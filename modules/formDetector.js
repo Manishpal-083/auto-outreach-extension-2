@@ -1,4 +1,6 @@
 // modules/formDetector.js
+import { WebsiteScanner } from './websiteScanner.js';
+import { DOMUtils } from './domUtils.js';
 
 export class FormDetector {
   // Define keyword dictionaries for scoring target fields
@@ -44,223 +46,19 @@ export class FormDetector {
    * to find all candidate interactive elements.
    */
   static getAllElements(root = (typeof document !== 'undefined' ? document : null)) {
-    const elements = [];
-
-    function traverse(node) {
-      if (!node) return;
-
-      // Handle element nodes
-      if (node.nodeType === Node.ELEMENT_NODE) {
-        elements.push(node);
-
-        // Traverse Open Shadow DOM
-        if (node.shadowRoot) {
-          traverse(node.shadowRoot);
-        }
-
-        // Traverse same-origin iframes
-        if (node.tagName === 'IFRAME') {
-          try {
-            const iframeDoc = node.contentDocument || node.contentWindow.document;
-            if (iframeDoc) {
-              traverse(iframeDoc);
-            }
-          } catch (e) {
-            // Ignore cross-origin iframes safely
-          }
-        }
-      }
-
-      // Traverse children
-      let child = node.firstChild;
-      while (child) {
-        traverse(child);
-        child = child.nextSibling;
-      }
-    }
-
-    traverse(root);
-    return elements;
+    return WebsiteScanner.getAllElements(root);
   }
 
-  /**
-   * Performs recursive Shadow DOM traversal following:
-   * document -> shadowRoot -> nested shadowRoot -> forms -> inputs
-   * Returns a merged list of discovered input elements.
-   */
   static traverseShadowDOM(root = (typeof document !== 'undefined' ? document : null)) {
-    const inputs = [];
-    const forms = [];
-    const orphanInputs = [];
-
-    function findFormsAndInputs(node) {
-      if (!node) return;
-
-      if (node.nodeType === Node.ELEMENT_NODE) {
-        const tagName = node.tagName.toLowerCase();
-        
-        if (tagName === 'form') {
-          forms.push(node);
-        }
-
-        const isInput = tagName === 'input' || tagName === 'textarea' || tagName === 'select' ||
-                        (node.hasAttribute('contenteditable') && node.getAttribute('contenteditable') !== 'false') ||
-                        node.getAttribute('role') === 'textbox';
-                        
-        if (isInput) {
-          orphanInputs.push(node);
-        }
-
-        if (node.shadowRoot) {
-          findFormsAndInputs(node.shadowRoot);
-        }
-
-        if (tagName === 'iframe') {
-          try {
-            const iframeDoc = node.contentDocument || node.contentWindow.document;
-            if (iframeDoc) {
-              findFormsAndInputs(iframeDoc);
-            }
-          } catch (e) {}
-        }
-      }
-
-      let child = node.firstChild;
-      while (child) {
-        findFormsAndInputs(child);
-        child = child.nextSibling;
-      }
-    }
-
-    findFormsAndInputs(root);
-
-    if (forms.length > 0) {
-      forms.forEach(form => {
-        function collectInputs(subNode) {
-          if (!subNode) return;
-          if (subNode.nodeType === Node.ELEMENT_NODE) {
-            const tagName = subNode.tagName.toLowerCase();
-            const isInput = tagName === 'input' || tagName === 'textarea' || tagName === 'select' ||
-                            (subNode.hasAttribute('contenteditable') && subNode.getAttribute('contenteditable') !== 'false') ||
-                            subNode.getAttribute('role') === 'textbox';
-            if (isInput && !inputs.includes(subNode)) {
-              inputs.push(subNode);
-            }
-            if (subNode.shadowRoot) {
-              collectInputs(subNode.shadowRoot);
-            }
-          }
-          let child = subNode.firstChild;
-          while (child) {
-            collectInputs(child);
-            child = child.nextSibling;
-          }
-        }
-        collectInputs(form);
-      });
-    }
-
-    const merged = inputs.length > 0 ? inputs : orphanInputs;
-    
-    return merged.filter(el => {
-      if (el.tagName.toLowerCase() === 'input') {
-        const type = (el.getAttribute('type') || 'text').toLowerCase();
-        return !['submit', 'button', 'image', 'radio', 'checkbox', 'file', 'reset'].includes(type);
-      }
-      return true;
-    });
+    return WebsiteScanner.traverseShadowDOM(root);
   }
 
-  /**
-   * Filters all candidate interactive inputs from the element list
-   */
   static getCandidates(root = (typeof document !== 'undefined' ? document : null)) {
-    const allElements = this.getAllElements(root);
-    return allElements.filter(el => {
-      const tagName = el.tagName.toLowerCase();
-
-      // Basic input types
-      if (tagName === 'input') {
-        const type = (el.getAttribute('type') || 'text').toLowerCase();
-        const ignoredTypes = ['submit', 'button', 'image', 'radio', 'checkbox', 'file', 'reset'];
-        return !ignoredTypes.includes(type);
-      }
-
-      // Textareas and selects
-      if (tagName === 'textarea' || tagName === 'select') {
-        return true;
-      }
-
-      // Contenteditable elements
-      if (el.hasAttribute('contenteditable') && el.getAttribute('contenteditable') !== 'false') {
-        return true;
-      }
-
-      // Generic textboxes
-      const role = el.getAttribute('role');
-      if (role === 'textbox' || role === 'searchbox') {
-        return true;
-      }
-
-      return false;
-    });
+    return WebsiteScanner.getCandidates(root);
   }
 
-  /**
-   * Finds any label text associated with the element
-   */
   static getLabelText(el) {
-    const rootNode = el.getRootNode();
-
-    // 1. Explicit association via label[for="id"]
-    if (el.id && typeof rootNode.querySelector === 'function') {
-      try {
-        const label = rootNode.querySelector(`label[for="${CSS.escape(el.id)}"]`);
-        if (label) return label.innerText || label.textContent;
-      } catch (e) {}
-    }
-
-    // 2. Implicit association (input wrapped inside a label tag)
-    const parentLabel = el.closest('label');
-    if (parentLabel) {
-      return parentLabel.innerText || parentLabel.textContent;
-    }
-
-    // 3. Explicit association via aria-labelledby
-    const labelledBy = el.getAttribute('aria-labelledby');
-    if (labelledBy && typeof rootNode.getElementById === 'function') {
-      const labelEl = rootNode.getElementById(labelledBy);
-      if (labelEl) return labelEl.innerText || labelEl.textContent;
-    }
-
-    // 4. Fallback: Search preceding DOM siblings or parent container text
-    let sibling = el.previousElementSibling;
-    while (sibling) {
-      if (sibling.tagName.toLowerCase() === 'label' || sibling.classList.contains('label')) {
-        return sibling.innerText || sibling.textContent;
-      }
-      sibling = sibling.previousElementSibling;
-    }
-
-    // Check parent text (if parent text is relatively short, it's likely a form label)
-    const parent = el.parentElement;
-    if (parent) {
-      // Get direct text contents of the parent element, excluding the input itself
-      const childTexts = [];
-      for (const node of parent.childNodes) {
-        if (node !== el && node.nodeType === Node.TEXT_NODE) {
-          childTexts.push(node.textContent.trim());
-        } else if (node !== el && node.nodeType === Node.ELEMENT_NODE && node.tagName.toLowerCase() !== 'input') {
-          childTexts.push(node.innerText || node.textContent);
-        }
-      }
-      const combinedText = childTexts.join(' ').trim();
-      if (combinedText.length > 0 && combinedText.length < 80) {
-        return combinedText;
-      }
-    }
-
-    return null;
+    return DOMUtils.getLabelText(el);
   }
 
   /**

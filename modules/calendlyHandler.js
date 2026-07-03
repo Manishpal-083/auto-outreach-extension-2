@@ -230,4 +230,24 @@ export class CalendlyHandler {
 
     return "Calendly Automation Active.";
   }
+
+  static async fillCalendlyInsideIframe(iframe, data) {
+    try {
+      const iframeDocument = iframe.contentDocument || iframe.contentWindow.document;
+      if (!iframeDocument) return "Calendly iframe secured by cross-origin policies.";
+      return await this.fillCalendlyDOM(iframeDocument, data);
+    } catch (e) {
+      const { ObserverManager } = await import('./observerManager.js');
+      ObserverManager.setupCalendlyIframeObserver(iframe, data);
+      return "Calendly tracking injected into Iframe.";
+    }
+  }
+
+  static async fillCalendlyFieldsDirect(data) {
+    return await this.fillCalendlyDOM(document, data);
+  }
+
+  static async fillCalendlyDOM(docContext, data) {
+    return this.automate(docContext, data);
+  }
 }
