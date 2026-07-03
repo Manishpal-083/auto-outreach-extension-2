@@ -781,18 +781,22 @@ function scoreNavigationElement(el) {
 
 let FormDetector = null;
 let AutofillEngine = null;
+let CalendlyHandler = null;
 
 async function loadModules() {
-  if (FormDetector && AutofillEngine) return;
+  if (FormDetector && AutofillEngine && CalendlyHandler) return;
   try {
     const formDetectorUrl = chrome.runtime.getURL("modules/formDetector.js");
     const autofillEngineUrl = chrome.runtime.getURL("modules/autofillEngine.js");
-    const [fdMod, aeMod] = await Promise.all([
+    const calendlyHandlerUrl = chrome.runtime.getURL("modules/calendlyHandler.js");
+    const [fdMod, aeMod, chMod] = await Promise.all([
       import(formDetectorUrl),
-      import(autofillEngineUrl)
+      import(autofillEngineUrl),
+      import(calendlyHandlerUrl)
     ]);
     FormDetector = fdMod.FormDetector;
     AutofillEngine = aeMod.AutofillEngine;
+    CalendlyHandler = chMod.CalendlyHandler;
     console.log("[Outreach Engine] Smart modules imported dynamically.");
   } catch (e) {
     console.error("[Outreach Engine] Dynamic import error: ", e);
@@ -1049,119 +1053,20 @@ async function fillCalendlyFieldsDirect(data) {
 }
 
 async function fillCalendlyDOM(docContext, data) {
-  if (window.calendlyFormFilled) return "Calendly already completed.";
-
-  let isTimePanelOpen = docContext.querySelector('[data-testid="slot-button"], [data-component="time-slots"], [data-component="spot-list"] button, button[aria-label*="select time" i], button[data-selenium-slot], button[aria-label*="am"], button[aria-label*="pm"]');
-
-  if (!isTimePanelOpen && !window.dateClicked) {
-    const dateButtons = [
-      ...docContext.querySelectorAll('button[aria-label*="Available"], button[data-calendar-date], [role="gridcell"] button')
-    ].filter(btn => {
-      const txt = (btn.getAttribute("aria-label") || btn.innerText || "").toLowerCase();
-      const isCcDisabled = btn.disabled ||
-        btn.getAttribute("aria-disabled") === "true" ||
-        btn.classList.contains("disabled") ||
-        txt.includes("unavailable");
-      return !isCcDisabled && btn.offsetParent !== null;
-    });
-
-    if (dateButtons.length) {
-      window.dateClicked = true;
-      const targetDate = dateButtons[0];
-      realClick(targetDate);
-      await new Promise(r => setTimeout(r, 2500));
-    }
-  }
-
-  const nextConfirmBtn = [...docContext.querySelectorAll("button")].find(btn => {
-    const btnText = (btn.innerText || btn.textContent || "").toLowerCase();
-    return btnText.includes("next") || btnText.includes("confirm");
-  });
-
-  if (nextConfirmBtn) {
-    realClick(nextConfirmBtn);
-    await new Promise(r => setTimeout(r, 2500)); 
-  } else {
-    const timeSlots = [
-      ...docContext.querySelectorAll('[data-testid="slot-button"], [data-component="time-slots"] button, [data-component="spot-list"] button, button[aria-label*="select time" i], button[data-selenium-slot], button[aria-label*="am" i], button[aria-label*="pm" i]')
-    ].filter(slot => !slot.disabled && slot.getAttribute("aria-disabled") !== "true" && slot.offsetParent !== null);
-
-    if (timeSlots.length) {
-      realClick(timeSlots[0]);
-
-      const dynamicNextBtn = [...docContext.querySelectorAll("button")].find(b => {
-        const btnText = (b.innerText || b.textContent || "").toLowerCase();
-        return btnText.includes("next") ||
-          btnText.includes("confirm") ||
-          btnText.includes("select") ||
-          b.getAttribute("data-testid") === "select-button" ||
-          b.getAttribute("aria-label")?.toLowerCase().includes("next");
-      });
-
-      if (dynamicNextBtn) {
-        realClick(dynamicNextBtn);
-        await new Promise(r => setTimeout(r, 2500));
-      }
-    }
-  }
-
   await loadModules();
-  let nameInput, emailInput, notesInput;
-  if (FormDetector && AutofillEngine) {
-    const detected = FormDetector.detectFields(docContext);
-    nameInput = detected.name.element;
-    emailInput = detected.email.element;
-    notesInput = detected.message.element;
-  } else {
-    nameInput = docContext.querySelector('input[name="name"], input[autocomplete="name"], input[id*="name" i], input[type="text"]');
-    emailInput = docContext.querySelector('input[type="email"], input[name="email"], input[id*="email" i]');
-    notesInput = docContext.querySelector('textarea');
+  if (CalendlyHandler) {
+    return CalendlyHandler.automate(docContext, data);
   }
 
-  let filled = false;
-  const fillHelper = (el, val) => {
-    if (!el || !val) return false;
-    if (AutofillEngine) {
-      return AutofillEngine.fillInput(el, val);
-    } else {
-      el.focus(); el.value = val;
-      el.dispatchEvent(new Event("input", { bubbles: true }));
-      el.dispatchEvent(new Event("change", { bubbles: true }));
-      el.blur();
-      return true;
-    }
-  };
-
-  if (nameInput) { fillHelper(nameInput, data.name); filled = true; }
-  if (emailInput) { fillHelper(emailInput, data.email); filled = true; }
-  if (notesInput) { fillHelper(notesInput, data.message); }
-
-  if (!filled) {
-    setupCalendlyObserver(docContext, data);
-    return "Waiting for final form layout to mount...";
+  // Basic fallback
+  console.warn("[Outreach Engine] CalendlyHandler not available. Falling back...");
+  const emailInput = docContext.querySelector('input[type="email"]');
+  if (emailInput) {
+    emailInput.value = data.email;
+    return "Fallback filled email.";
   }
-
-  window.calendlyFormFilled = true;
-
-  setTimeout(() => {
-    const finalScheduleBtn = [...docContext.querySelectorAll("button")].find(btn => {
-      const text = (btn.innerText || btn.textContent || "").toLowerCase();
-      return text.includes("schedule event") ||
-        text.includes("schedule") ||
-        text.includes("confirm") ||
-        text.includes("book");
-    });
-
-    if (finalScheduleBtn) {
-      realClick(finalScheduleBtn);
-      setTimeout(() => {
-        resetAutomation();
-        chrome.runtime.sendMessage({ action: "AUTOMATION_COMPLETE_SUCCESS" });
-      }, 2500);
-    }
-  }, 1000);
-
-  return "Calendly Workflow Executed Cleanly.";
+  return "No Calendly Handler loaded.";
+}
 }
 
 function setupCalendlyObserver(docContext, data) {
