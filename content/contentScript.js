@@ -541,6 +541,8 @@ chrome.runtime.onMessage.addListener((request, sender, sendResponse) => {
       }
 
       if (request.stage === "FILLING_FORM") {
+        globalLeadData = request.payload;
+        startGlobalMutationObserver();
         const result = await handleFormOrCalendlyFilling(request.payload);
         sendResponse({ success: true, status: result });
         return;
@@ -782,6 +784,79 @@ function scoreNavigationElement(el) {
 let FormDetector = null;
 let AutofillEngine = null;
 let CalendlyHandler = null;
+
+let filledElements = new WeakSet();
+let observerActive = false;
+let globalLeadData = null;
+
+function startGlobalMutationObserver() {
+  if (observerActive) return;
+  observerActive = true;
+
+  console.log("[Outreach Engine] Starting global MutationObserver for dynamic forms...");
+
+  const checkAndAutofill = async () => {
+    if (!globalLeadData) return;
+
+    await loadModules();
+    if (!FormDetector || !AutofillEngine) return;
+
+    const detected = FormDetector.detectFields();
+    let filledSomething = false;
+
+    const fieldsToFill = ['name', 'email', 'message', 'phone', 'company', 'subject'];
+    
+    for (const field of fieldsToFill) {
+      const match = detected[field];
+      const val = globalLeadData[field];
+      
+      if (match && match.element && val) {
+        const el = match.element;
+        
+        if (filledElements.has(el) || document.activeElement === el) {
+          continue;
+        }
+
+        console.log(`[Outreach Engine] Dynamic Form Event: Autofilling "${field}" (Confidence: ${match.confidence})`);
+        AutofillEngine.fillInput(el, val);
+        filledElements.add(el);
+        filledSomething = true;
+      }
+    }
+
+    if (filledSomething) {
+      console.log("[Outreach Engine] Dynamically detected form fields populated.");
+    }
+  };
+
+  const observer = new MutationObserver((mutations) => {
+    let shouldScan = false;
+    for (const mutation of mutations) {
+      if (mutation.type === 'childList' && mutation.addedNodes.length > 0) {
+        shouldScan = true;
+        break;
+      }
+      if (mutation.type === 'attributes') {
+        const attr = mutation.attributeName;
+        if (['name', 'id', 'placeholder', 'type', 'v-model', 'formcontrolname', 'contenteditable', 'role', 'aria-label', 'autocomplete'].includes(attr)) {
+          shouldScan = true;
+          break;
+        }
+      }
+    }
+
+    if (shouldScan) {
+      checkAndAutofill();
+    }
+  });
+
+  observer.observe(document.body, {
+    childList: true,
+    subtree: true,
+    attributes: true,
+    attributeFilter: ['name', 'id', 'placeholder', 'type', 'v-model', 'formcontrolname', 'contenteditable', 'role', 'aria-label', 'autocomplete']
+  });
+}
 
 async function loadModules() {
   if (FormDetector && AutofillEngine && CalendlyHandler) return;
@@ -1110,4 +1185,6 @@ function resetAutomation() {
   window.calendlyFormFilled = false;
   window.dateClicked = false;
   sessionStorage.removeItem("redirectedURL");
+  globalLeadData = null;
+  filledElements = new WeakSet();
 }
