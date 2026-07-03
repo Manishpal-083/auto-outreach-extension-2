@@ -784,6 +784,7 @@ function scoreNavigationElement(el) {
 let FormDetector = null;
 let AutofillEngine = null;
 let CalendlyHandler = null;
+let MultiStepNavigationEngine = null;
 
 let filledElements = new WeakSet();
 let observerActive = false;
@@ -859,19 +860,22 @@ function startGlobalMutationObserver() {
 }
 
 async function loadModules() {
-  if (FormDetector && AutofillEngine && CalendlyHandler) return;
+  if (FormDetector && AutofillEngine && CalendlyHandler && MultiStepNavigationEngine) return;
   try {
     const formDetectorUrl = chrome.runtime.getURL("modules/formDetector.js");
     const autofillEngineUrl = chrome.runtime.getURL("modules/autofillEngine.js");
     const calendlyHandlerUrl = chrome.runtime.getURL("modules/calendlyHandler.js");
-    const [fdMod, aeMod, chMod] = await Promise.all([
+    const navigationEngineUrl = chrome.runtime.getURL("modules/multiStepNavigationEngine.js");
+    const [fdMod, aeMod, chMod, neMod] = await Promise.all([
       import(formDetectorUrl),
       import(autofillEngineUrl),
-      import(calendlyHandlerUrl)
+      import(calendlyHandlerUrl),
+      import(navigationEngineUrl)
     ]);
     FormDetector = fdMod.FormDetector;
     AutofillEngine = aeMod.AutofillEngine;
     CalendlyHandler = chMod.CalendlyHandler;
+    MultiStepNavigationEngine = neMod.MultiStepNavigationEngine;
     console.log("[Outreach Engine] Smart modules imported dynamically.");
   } catch (e) {
     console.error("[Outreach Engine] Dynamic import error: ", e);
@@ -905,6 +909,9 @@ async function handleFormOrCalendlyFilling(data) {
       const hasPotentiallyDynamicForm = document.querySelector("form") || document.querySelector("input") || document.querySelector("textarea") || document.querySelector('[role="textbox"]') || document.querySelector('[contenteditable]');
       if (hasPotentiallyDynamicForm) {
         nativeFormStatus = await waitForAndFillStandardFields(data);
+      } else if (MultiStepNavigationEngine) {
+        console.log("[Outreach Engine] No forms found. Initiating Multi-Step Navigation Engine...");
+        nativeFormStatus = MultiStepNavigationEngine.run(document, data);
       }
     }
   } catch (err) { nativeFormStatus = err.message; }
