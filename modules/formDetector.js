@@ -76,6 +76,94 @@ export class FormDetector {
   }
 
   /**
+   * Performs recursive Shadow DOM traversal following:
+   * document -> shadowRoot -> nested shadowRoot -> forms -> inputs
+   * Returns a merged list of discovered input elements.
+   */
+  static traverseShadowDOM(root = (typeof document !== 'undefined' ? document : null)) {
+    const inputs = [];
+    const forms = [];
+    const orphanInputs = [];
+
+    function findFormsAndInputs(node) {
+      if (!node) return;
+
+      if (node.nodeType === Node.ELEMENT_NODE) {
+        const tagName = node.tagName.toLowerCase();
+        
+        if (tagName === 'form') {
+          forms.push(node);
+        }
+
+        const isInput = tagName === 'input' || tagName === 'textarea' || tagName === 'select' ||
+                        (node.hasAttribute('contenteditable') && node.getAttribute('contenteditable') !== 'false') ||
+                        node.getAttribute('role') === 'textbox';
+                        
+        if (isInput) {
+          orphanInputs.push(node);
+        }
+
+        if (node.shadowRoot) {
+          findFormsAndInputs(node.shadowRoot);
+        }
+
+        if (tagName === 'iframe') {
+          try {
+            const iframeDoc = node.contentDocument || node.contentWindow.document;
+            if (iframeDoc) {
+              findFormsAndInputs(iframeDoc);
+            }
+          } catch (e) {}
+        }
+      }
+
+      let child = node.firstChild;
+      while (child) {
+        findFormsAndInputs(child);
+        child = child.nextSibling;
+      }
+    }
+
+    findFormsAndInputs(root);
+
+    if (forms.length > 0) {
+      forms.forEach(form => {
+        function collectInputs(subNode) {
+          if (!subNode) return;
+          if (subNode.nodeType === Node.ELEMENT_NODE) {
+            const tagName = subNode.tagName.toLowerCase();
+            const isInput = tagName === 'input' || tagName === 'textarea' || tagName === 'select' ||
+                            (subNode.hasAttribute('contenteditable') && subNode.getAttribute('contenteditable') !== 'false') ||
+                            subNode.getAttribute('role') === 'textbox';
+            if (isInput && !inputs.includes(subNode)) {
+              inputs.push(subNode);
+            }
+            if (subNode.shadowRoot) {
+              collectInputs(subNode.shadowRoot);
+            }
+          }
+          let child = subNode.firstChild;
+          while (child) {
+            collectInputs(child);
+            child = child.nextSibling;
+          }
+        }
+        collectInputs(form);
+      });
+    }
+
+    const merged = inputs.length > 0 ? inputs : orphanInputs;
+    
+    return merged.filter(el => {
+      if (el.tagName.toLowerCase() === 'input') {
+        const type = (el.getAttribute('type') || 'text').toLowerCase();
+        return !['submit', 'button', 'image', 'radio', 'checkbox', 'file', 'reset'].includes(type);
+      }
+      return true;
+    });
+  }
+
+  /**
    * Filters all candidate interactive inputs from the element list
    */
   static getCandidates(root = (typeof document !== 'undefined' ? document : null)) {
